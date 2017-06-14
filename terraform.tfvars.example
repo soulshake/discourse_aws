@@ -1,0 +1,17 @@
+region = "eu-central-1"
+
+DISCOURSE_SMTP_USER_NAME = "admin@example.com"
+
+DISCOURSE_DEVELOPER_EMAILS = "admin@example.com"
+
+DISCOURSE_SMTP_ADDRESS = "mail.example.com"
+
+DISCOURSE_SMTP_PASSWORD = "pa$$word"
+
+PUBLIC_KEY = ""
+
+DISCOURSE_DB_USERNAME = "discourse"
+
+DISCOURSE_DB_PASSWORD = "SOME_SECRET"
+
+LETSENCRYPT_ACCOUNT_EMAIL = "me@example.com"
