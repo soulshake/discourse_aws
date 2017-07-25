@@ -19,6 +19,7 @@ DEPENDENCIES="
 ENVVARS="
     AWS_ACCESS_KEY_ID
     AWS_SECRET_ACCESS_KEY
+    AWS_DEFAULT_REGION
     "
 
 die() {
@@ -130,6 +131,40 @@ check_and_wait_for_host() {
     done
 }
 
+create_state_bucket() {
+    ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+
+    aws s3api create-bucket \
+        --region "${AWS_DEFAULT_REGION}" \
+        --create-bucket-configuration LocationConstraint="${AWS_DEFAULT_REGION}" \
+        --bucket "discourse-terraform-tfstate-${ACCOUNT_ID}"
+}
+
+create_state_db() {
+    aws dynamodb create-table \
+        --region "${AWS_DEFAULT_REGION}" \
+        --table-name terraform_statelock \
+        --attribute-definitions AttributeName=LockID,AttributeType=S \
+        --key-schema AttributeName=LockID,KeyType=HASH \
+        --provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1
+}
+
+# Write backend configuration to backend_config.tf. This is needed because the
+# bucket name is dynamic (based on AWS account ID), but Terraform backend config
+# doesn't allow interpolation.
+create_backend_config() {
+    cat <<EOF > ./backend_config.tf
+terraform {
+  backend "s3" {
+    bucket         = "discourse-terraform-tfstate-${ACCOUNT_ID}"
+    key            = "dev/discourse.tfstate"
+    region         = "${AWS_DEFAULT_REGION}"
+    lock_table     = "terraform_statelock"
+  }
+}
+EOF
+}
+
 greet
 check_dependencies || exit 1
 check_envvars || exit 1
@@ -139,6 +174,12 @@ sync_keys   # Upload your default SSH key to AWS if needed, to be added to each 
 tf_public_key=$(terraform output public_key | cut -d " " -f 1-2)
 my_key=$(get_local_public_key)
 [[ "$tf_public_key" == "$my_key" ]] || die "your local public key doesn't match the one in terraform.tfvars (\`terraform output PUBLIC_KEY\`). Run 'ssh-add -L | cut -d \" \" -f 1-2' and add the resulting output to the resource 'aws_key_pair' 'discourse-dev' in discourse.tf."
+
+# Create an s3 bucket and dynamoDB table if they don't exist already
+create_state_bucket || true
+create_state_db || true
+
+create_backend_config
 
 check_and_wait_for_host
 

@@ -106,6 +106,8 @@ data "aws_db_instance" "database" {
 
 data "aws_availability_zones" "available" {}
 
+data "aws_caller_identity" "current" {}
+
 #################
 ### RESOURCES ###
 #################
@@ -238,38 +240,51 @@ resource "aws_route" "route" {
   gateway_id             = "${aws_internet_gateway.discourse_gw.id}"
 }
 
+resource "aws_kms_key" "discourse_kms_key" {
+  description             = "KMS key 1"
+  deletion_window_in_days = 10
+}
+
 data "terraform_remote_state" "discourse_tf_state" {
   backend = "s3"
 
   config {
-    bucket  = "discourse-tf-state-bucket"
-    key     = "dev/terraform.tfstate"
+    bucket  = "discourse-terraform-tfstate-${data.aws_caller_identity.current.account_id}"
+    key     = "dev/discourse.tfstate"
     region  = "${var.region}"
     encrypt = true
     logging = true
 
     # The ARN of a KMS Key to use for encrypting the state.
-    kms_key_id = "FIXME"
+    kms_key_id = "${aws_kms_key.discourse_kms_key.arn}"
 
     # The name of a DynamoDB table to use for state locking and consistency. The table must have a primary key named LockID. If not present, locking will be disabled.
-    dynamodb_table = "FIXME"
+    dynamodb_table = "${aws_dynamodb_table.terraform_statelock.name}"
   }
 }
 
-terraform {
-  backend "s3" {
-    bucket = "discourse-tf-state-bucket"
-    key    = "dev/terraform.tfstate"
+resource "aws_dynamodb_table" "terraform_statelock" {
+  name           = "terraform_statelock"
+  read_capacity  = 20
+  write_capacity = 20
+  hash_key       = "LockID"
 
-    # FIXME: backend configuration cannot contain interpolations
-    # region = "${var.region}"
-    region = "eu-central-1"
+  attribute {
+    name = "LockID"
+    type = "S"
+  }
+
+  tags {
+    Name        = "discourse"
+    Source      = "terraform"
+    Environment = "dev"
   }
 }
 
 resource "aws_s3_bucket" "discourse_tf_state_bucket" {
-  bucket = "discourse-tf-state-bucket"
-  acl    = "private"
+  bucket = "discourse-terraform-tfstate-${data.aws_caller_identity.current.account_id}"
+
+  acl = "private"
 
   versioning {
     enabled = true
@@ -327,35 +342,6 @@ resource "aws_security_group" "allow_all" {
   }
 }
 
-# Add a few rules to permit web and SSH traffic directly to the discourse app instance for debugging purposes.
-# This should probably be removed in production.
-resource "aws_security_group_rule" "allow_http" {
-  type              = "ingress"
-  from_port         = 80
-  to_port           = 80
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = "${aws_instance.discourse_app.vpc_security_group_ids[0]}"
-}
-
-resource "aws_security_group_rule" "allow_https" {
-  type              = "ingress"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = "${aws_instance.discourse_app.vpc_security_group_ids[0]}"
-}
-
-resource "aws_security_group_rule" "allow_ssh" {
-  type              = "ingress"
-  from_port         = 22
-  to_port           = 22
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = "${aws_instance.discourse_app.vpc_security_group_ids[0]}"
-}
-
 resource "aws_subnet" "a" {
   vpc_id = "${aws_vpc.discourse_vpc.id}"
 
@@ -394,6 +380,18 @@ resource "aws_vpc" "discourse_vpc" {
 
 # The outputs defined below can be accessed via terraform, e.g. `terraform output DISCOURSE_DB_HOST`.
 # These are used to generate the .env that is copied to the Discourse host for easier setup.
+
+output "account_id" {
+  value = "${data.aws_caller_identity.current.account_id}"
+}
+
+output "caller_arn" {
+  value = "${data.aws_caller_identity.current.arn}"
+}
+
+output "caller_user" {
+  value = "${data.aws_caller_identity.current.user_id}"
+}
 
 output "DISCOURSE_APP_PUBLIC_IP" {
   value = "${aws_instance.discourse_app.public_ip}"
