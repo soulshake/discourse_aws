@@ -108,6 +108,8 @@ data "aws_availability_zones" "available" {}
 
 data "aws_caller_identity" "current" {}
 
+data "aws_elb_service_account" "main" {}
+
 data "terraform_remote_state" "discourse_tf_state" {
   backend = "s3"
 
@@ -134,6 +136,52 @@ provider "aws" {
   access_key = "${var.access_key}"
   secret_key = "${var.secret_key}"
   region     = "${var.region}"
+}
+
+resource "aws_alb" "discourse_alb" {
+  name            = "discourse-alb"
+  internal        = false
+  security_groups = ["${aws_vpc.discourse_vpc.default_security_group_id}", "${aws_security_group.allow_all.id}"]
+  subnets         = ["${aws_subnet.a.id}", "${aws_subnet.b.id}"]
+
+  access_logs {
+    bucket = "${aws_s3_bucket.discourse_log_bucket.bucket}"
+    prefix = "log/alb"
+  }
+
+  tags {
+    Name   = "discourse"
+    Source = "terraform"
+  }
+}
+
+resource "aws_alb_listener" "front_end" {
+  load_balancer_arn = "${aws_alb.discourse_alb.arn}"
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    target_group_arn = "${aws_alb_target_group.front_end.arn}"
+    type             = "forward"
+  }
+}
+
+resource "aws_alb_target_group" "front_end" {
+  name     = "tf-example-alb-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = "${aws_vpc.discourse_vpc.id}"
+
+  tags {
+    Name   = "discourse"
+    Source = "terraform"
+  }
+}
+
+resource "aws_alb_target_group_attachment" "front_end" {
+  target_group_arn = "${aws_alb_target_group.front_end.arn}"
+  target_id        = "${aws_instance.discourse_app.id}"
+  port             = 80
 }
 
 resource "aws_instance" "discourse_app" {
@@ -203,9 +251,8 @@ resource "aws_dynamodb_table" "terraform_statelock" {
   }
 
   tags {
-    Name        = "discourse"
-    Source      = "terraform"
-    Environment = "dev"
+    Name   = "discourse"
+    Source = "terraform"
   }
 }
 
@@ -223,32 +270,6 @@ resource "aws_elasticache_cluster" "discourse_redis" {
   parameter_group_name = "default.redis3.2"
   subnet_group_name    = "${aws_elasticache_subnet_group.discourse_elasticache_subnet.name}"
   availability_zone    = "${data.aws_availability_zones.available.names[1]}"
-
-  tags {
-    Name   = "discourse"
-    Source = "terraform"
-  }
-}
-
-# Create a new load balancer. Update 'instances' if more instances need to be added.
-resource "aws_elb" "discourse_elb" {
-  name = "discourse-elb"
-
-  subnets         = ["${aws_subnet.a.id}"]
-  security_groups = ["${aws_vpc.discourse_vpc.default_security_group_id}", "${aws_security_group.allow_all.id}"]
-
-  listener {
-    instance_port     = 80
-    instance_protocol = "http"
-    lb_port           = 80
-    lb_protocol       = "http"
-  }
-
-  instances                   = ["${aws_instance.discourse_app.id}"]
-  cross_zone_load_balancing   = true
-  idle_timeout                = 400
-  connection_draining         = true
-  connection_draining_timeout = 400
 
   tags {
     Name   = "discourse"
@@ -285,9 +306,8 @@ resource "aws_route53_zone" "discourse_prod_zone" {
   name = "discourse.cloud."
 
   tags {
-    Name        = "discourse"
-    Source      = "terraform"
-    Environment = "prod"
+    Name   = "discourse"
+    Source = "terraform"
   }
 }
 
@@ -311,7 +331,7 @@ resource "aws_route53_record" "www" {
   type    = "CNAME"
   ttl     = "60"
 
-  records = ["${aws_elb.discourse_elb.dns_name}"]
+  records = ["${aws_alb.discourse_alb.dns_name}"]
 }
 
 resource "aws_s3_bucket" "discourse_tf_state_bucket" {
@@ -329,9 +349,8 @@ resource "aws_s3_bucket" "discourse_tf_state_bucket" {
   }
 
   tags {
-    Name        = "discourse"
-    Source      = "terraform"
-    Environment = "dev"
+    Name   = "discourse"
+    Source = "terraform"
   }
 }
 
@@ -343,6 +362,27 @@ resource "aws_s3_bucket" "discourse_log_bucket" {
     target_bucket = "discourse-log-bucket"
     target_prefix = "log/self/"
   }
+
+  policy = <<POLICY
+{
+  "Id": "Policy",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Effect": "Allow",
+      "Resource": "arn:aws:s3:::discourse-log-bucket/log/*",
+      "Principal": {
+        "AWS": [
+          "${data.aws_elb_service_account.main.arn}"
+        ]
+      }
+    }
+  ]
+}
+POLICY
 
   tags {
     Name   = "discourse"
@@ -454,8 +494,8 @@ output "DISCOURSE_DEVELOPER_EMAILS" {
   value = "${var.DISCOURSE_DEVELOPER_EMAILS}"
 }
 
-output "DISCOURSE_ELB_HOSTNAME" {
-  value = "${aws_elb.discourse_elb.dns_name}"
+output "DISCOURSE_ALB_HOSTNAME" {
+  value = "${aws_alb.discourse_alb.dns_name}"
 }
 
 output "DISCOURSE_HOSTNAME" {
