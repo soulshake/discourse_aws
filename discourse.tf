@@ -108,6 +108,24 @@ data "aws_availability_zones" "available" {}
 
 data "aws_caller_identity" "current" {}
 
+data "terraform_remote_state" "discourse_tf_state" {
+  backend = "s3"
+
+  config {
+    bucket  = "discourse-terraform-tfstate-${data.aws_caller_identity.current.account_id}"
+    key     = "dev/discourse.tfstate"
+    region  = "${var.region}"
+    encrypt = true
+    logging = true
+
+    # The ARN of a KMS Key to use for encrypting the state.
+    kms_key_id = "${aws_kms_key.discourse_kms_key.arn}"
+
+    # The name of a DynamoDB table to use for state locking and consistency. The table must have a primary key named LockID. If not present, locking will be disabled.
+    dynamodb_table = "${aws_dynamodb_table.terraform_statelock.name}"
+  }
+}
+
 #################
 ### RESOURCES ###
 #################
@@ -173,6 +191,24 @@ resource "aws_db_subnet_group" "discourse_db_subnet_group" {
   }
 }
 
+resource "aws_dynamodb_table" "terraform_statelock" {
+  name           = "terraform_statelock"
+  read_capacity  = 20
+  write_capacity = 20
+  hash_key       = "LockID"
+
+  attribute {
+    name = "LockID"
+    type = "S"
+  }
+
+  tags {
+    Name        = "discourse"
+    Source      = "terraform"
+    Environment = "dev"
+  }
+}
+
 resource "aws_elasticache_subnet_group" "discourse_elasticache_subnet" {
   name       = "discourse"
   subnet_ids = ["${aws_subnet.a.id}", "${aws_subnet.b.id}"]
@@ -234,51 +270,15 @@ resource "aws_key_pair" "discourse_dev" {
   public_key = "${var.PUBLIC_KEY}"
 }
 
-resource "aws_route" "route" {
-  route_table_id         = "${aws_vpc.discourse_vpc.main_route_table_id}"
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = "${aws_internet_gateway.discourse_gw.id}"
-}
-
 resource "aws_kms_key" "discourse_kms_key" {
   description             = "KMS key 1"
   deletion_window_in_days = 10
 }
 
-data "terraform_remote_state" "discourse_tf_state" {
-  backend = "s3"
-
-  config {
-    bucket  = "discourse-terraform-tfstate-${data.aws_caller_identity.current.account_id}"
-    key     = "dev/discourse.tfstate"
-    region  = "${var.region}"
-    encrypt = true
-    logging = true
-
-    # The ARN of a KMS Key to use for encrypting the state.
-    kms_key_id = "${aws_kms_key.discourse_kms_key.arn}"
-
-    # The name of a DynamoDB table to use for state locking and consistency. The table must have a primary key named LockID. If not present, locking will be disabled.
-    dynamodb_table = "${aws_dynamodb_table.terraform_statelock.name}"
-  }
-}
-
-resource "aws_dynamodb_table" "terraform_statelock" {
-  name           = "terraform_statelock"
-  read_capacity  = 20
-  write_capacity = 20
-  hash_key       = "LockID"
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-
-  tags {
-    Name        = "discourse"
-    Source      = "terraform"
-    Environment = "dev"
-  }
+resource "aws_route" "route" {
+  route_table_id         = "${aws_vpc.discourse_vpc.main_route_table_id}"
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = "${aws_internet_gateway.discourse_gw.id}"
 }
 
 resource "aws_s3_bucket" "discourse_tf_state_bucket" {
