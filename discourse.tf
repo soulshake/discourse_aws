@@ -20,10 +20,7 @@ variable "DISCOURSE_DEVELOPER_EMAILS" {}
 variable "DISCOURSE_SMTP_ADDRESS" {}
 variable "DISCOURSE_SMTP_USER_NAME" {}
 variable "DISCOURSE_SMTP_PASSWORD" {}
-
-variable "DISCOURSE_SMTP_PORT" {
-  default = 587
-}
+variable "DISCOURSE_SMTP_PORT" {}
 
 variable "DISCOURSE_DB_USERNAME" {}
 variable "DISCOURSE_DB_PASSWORD" {}
@@ -239,6 +236,70 @@ resource "aws_route" "route" {
   route_table_id         = "${aws_vpc.discourse_vpc.main_route_table_id}"
   destination_cidr_block = "0.0.0.0/0"
   gateway_id             = "${aws_internet_gateway.discourse_gw.id}"
+}
+
+data "terraform_remote_state" "discourse_tf_state" {
+  backend = "s3"
+
+  config {
+    bucket  = "discourse-tf-state-bucket"
+    key     = "dev/terraform.tfstate"
+    region  = "${var.region}"
+    encrypt = true
+    logging = true
+
+    # The ARN of a KMS Key to use for encrypting the state.
+    kms_key_id = "FIXME"
+
+    # The name of a DynamoDB table to use for state locking and consistency. The table must have a primary key named LockID. If not present, locking will be disabled.
+    dynamodb_table = "FIXME"
+  }
+}
+
+terraform {
+  backend "s3" {
+    bucket = "discourse-tf-state-bucket"
+    key    = "dev/terraform.tfstate"
+
+    # FIXME: backend configuration cannot contain interpolations
+    # region = "${var.region}"
+    region = "eu-central-1"
+  }
+}
+
+resource "aws_s3_bucket" "discourse_tf_state_bucket" {
+  bucket = "discourse-tf-state-bucket"
+  acl    = "private"
+
+  versioning {
+    enabled = true
+  }
+
+  logging {
+    target_bucket = "${aws_s3_bucket.discourse_log_bucket.id}"
+    target_prefix = "log/terraform/"
+  }
+
+  tags {
+    Name        = "discourse"
+    Source      = "terraform"
+    Environment = "dev"
+  }
+}
+
+resource "aws_s3_bucket" "discourse_log_bucket" {
+  bucket = "discourse-log-bucket"
+  acl    = "log-delivery-write"
+
+  logging {
+    target_bucket = "discourse-log-bucket"
+    target_prefix = "log/self/"
+  }
+
+  tags {
+    Name   = "discourse"
+    Source = "terraform"
+  }
 }
 
 resource "aws_security_group" "allow_all" {

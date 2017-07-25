@@ -8,6 +8,8 @@ DISCOURSE_SMTP_ADDRESS = "mail.example.com"
 
 DISCOURSE_SMTP_PASSWORD = "pa$$word"
 
+DISCOURSE_SMTP_PORT = "587"
+
 PUBLIC_KEY = ""
 
 DISCOURSE_DB_USERNAME = "discourse"
