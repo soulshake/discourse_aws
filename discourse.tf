@@ -281,6 +281,39 @@ resource "aws_route" "route" {
   gateway_id             = "${aws_internet_gateway.discourse_gw.id}"
 }
 
+resource "aws_route53_zone" "discourse_prod_zone" {
+  name = "discourse.cloud."
+
+  tags {
+    Name        = "discourse"
+    Source      = "terraform"
+    Environment = "prod"
+  }
+}
+
+resource "aws_route53_record" "prod-ns" {
+  zone_id = "${aws_route53_zone.discourse_prod_zone.zone_id}"
+  name    = "discourse.cloud."
+  type    = "NS"
+  ttl     = "60"
+
+  records = [
+    "${aws_route53_zone.discourse_prod_zone.name_servers.0}",
+    "${aws_route53_zone.discourse_prod_zone.name_servers.1}",
+    "${aws_route53_zone.discourse_prod_zone.name_servers.2}",
+    "${aws_route53_zone.discourse_prod_zone.name_servers.3}",
+  ]
+}
+
+resource "aws_route53_record" "www" {
+  zone_id = "${aws_route53_zone.discourse_prod_zone.zone_id}"
+  name    = "www"
+  type    = "CNAME"
+  ttl     = "60"
+
+  records = ["${aws_elb.discourse_elb.dns_name}"]
+}
+
 resource "aws_s3_bucket" "discourse_tf_state_bucket" {
   bucket = "discourse-terraform-tfstate-${data.aws_caller_identity.current.account_id}"
 
