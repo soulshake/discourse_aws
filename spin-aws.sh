@@ -160,6 +160,7 @@ terraform {
     key            = "dev/discourse.tfstate"
     region         = "${AWS_DEFAULT_REGION}"
     lock_table     = "terraform_statelock"
+    encrypt        = true
   }
 }
 EOF
