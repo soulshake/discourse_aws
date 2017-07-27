@@ -7,14 +7,9 @@
 # If you need to change a hardcoded value in this file, consider replacing it with a variable.
 # For more information, see README.md.
 
-variable "access_key" {}
-variable "secret_key" {}
-
 variable "app_instance_type" {
   default = "t2.medium"
 }
-
-variable "PUBLIC_KEY" {}
 
 variable "DISCOURSE_DEVELOPER_EMAILS" {}
 variable "DISCOURSE_SMTP_ADDRESS" {}
@@ -24,8 +19,6 @@ variable "DISCOURSE_SMTP_PORT" {}
 
 variable "DISCOURSE_DB_USERNAME" {}
 variable "DISCOURSE_DB_PASSWORD" {}
-
-variable "region" {}
 
 variable "LANG" {
   default = "en_US.UTF-8"
@@ -110,21 +103,15 @@ data "aws_caller_identity" "current" {}
 
 data "aws_elb_service_account" "main" {}
 
-data "terraform_remote_state" "discourse_tf_state" {
+data "terraform_remote_state" "discourse_remote_state" {
   backend = "s3"
 
   config {
-    bucket  = "discourse-terraform-tfstate-${data.aws_caller_identity.current.account_id}"
-    key     = "dev/discourse.tfstate"
-    region  = "${var.region}"
-    encrypt = true
-    logging = true
-
-    # The ARN of a KMS Key to use for encrypting the state.
-    kms_key_id = "${aws_kms_key.discourse_kms_key.arn}"
-
-    # The name of a DynamoDB table to use for state locking and consistency. The table must have a primary key named LockID. If not present, locking will be disabled.
-    dynamodb_table = "${aws_dynamodb_table.terraform_statelock.name}"
+    name           = "discourse/remote-state"
+    bucket         = "wombles-whacky-whatsit"
+    key            = "tfstate"
+    region         = "ap-southeast-2"
+    dynamodb_table = "wombles-whacky-whatsit"
   }
 }
 
@@ -132,14 +119,8 @@ data "terraform_remote_state" "discourse_tf_state" {
 ### RESOURCES ###
 #################
 
-provider "aws" {
-  access_key = "${var.access_key}"
-  secret_key = "${var.secret_key}"
-  region     = "${var.region}"
-}
-
 resource "aws_alb" "discourse_alb" {
-  name            = "discourse-alb"
+  name            = "discourse-alb-${terraform.env}"
   internal        = false
   security_groups = ["${aws_vpc.discourse_vpc.default_security_group_id}", "${aws_security_group.allow_all.id}"]
   subnets         = ["${aws_subnet.a.id}", "${aws_subnet.b.id}"]
@@ -150,44 +131,46 @@ resource "aws_alb" "discourse_alb" {
   }
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
 
-resource "aws_alb_listener" "front_end" {
+resource "aws_alb_listener" "frontend" {
   load_balancer_arn = "${aws_alb.discourse_alb.arn}"
   port              = "80"
   protocol          = "HTTP"
 
   default_action {
-    target_group_arn = "${aws_alb_target_group.front_end.arn}"
+    target_group_arn = "${aws_alb_target_group.frontend.arn}"
     type             = "forward"
   }
 }
 
-resource "aws_alb_target_group" "front_end" {
-  name     = "tf-example-alb-tg"
+resource "aws_alb_target_group" "frontend" {
+  name     = "tf-discourse-alb-tg-${terraform.env}"
   port     = 80
   protocol = "HTTP"
   vpc_id   = "${aws_vpc.discourse_vpc.id}"
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
 
-resource "aws_alb_target_group_attachment" "front_end" {
-  target_group_arn = "${aws_alb_target_group.front_end.arn}"
+resource "aws_alb_target_group_attachment" "frontend" {
+  target_group_arn = "${aws_alb_target_group.frontend.arn}"
   target_id        = "${aws_instance.discourse_app.id}"
   port             = 80
 }
 
 resource "aws_instance" "discourse_app" {
-  ami           = "${data.aws_ami.discourse_ami.id}"
+  ami = "${data.aws_ami.discourse_ami.id}"
+
+  count         = "${terraform.env == "default" ? 2 : 1}"
   instance_type = "${var.app_instance_type}"
-  key_name      = "discourse-dev"                       # Uploaded automatically under this name by ./spin-aws.sh
+  key_name      = "discourse-dev"                         # Uploaded automatically under this name by ./spin-aws.sh
   user_data     = "${file("userdata.sh")}"
   subnet_id     = "${aws_subnet.a.id}"
   depends_on    = ["aws_internet_gateway.discourse_gw"]
@@ -199,7 +182,7 @@ resource "aws_instance" "discourse_app" {
   ]
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
@@ -223,24 +206,24 @@ resource "aws_db_instance" "discourse_postgres" {
   ]
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
 
 resource "aws_db_subnet_group" "discourse_db_subnet_group" {
-  name = "discourse"
+  name = "discourse-${terraform.env}"
 
   subnet_ids = ["${aws_subnet.a.id}", "${aws_subnet.b.id}"]
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
 
 resource "aws_dynamodb_table" "terraform_statelock" {
-  name           = "terraform_statelock"
+  name           = "terraform_statelock-${terraform.env}"
   read_capacity  = 20
   write_capacity = 20
   hash_key       = "LockID"
@@ -251,13 +234,13 @@ resource "aws_dynamodb_table" "terraform_statelock" {
   }
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
 
 resource "aws_elasticache_subnet_group" "discourse_elasticache_subnet" {
-  name       = "discourse"
+  name       = "discourse-${terraform.env}"
   subnet_ids = ["${aws_subnet.a.id}", "${aws_subnet.b.id}"]
 }
 
@@ -272,7 +255,7 @@ resource "aws_elasticache_cluster" "discourse_redis" {
   availability_zone    = "${data.aws_availability_zones.available.names[1]}"
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
@@ -281,14 +264,9 @@ resource "aws_internet_gateway" "discourse_gw" {
   vpc_id = "${aws_vpc.discourse_vpc.id}"
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
-}
-
-resource "aws_key_pair" "discourse_dev" {
-  key_name   = "discourse-dev"
-  public_key = "${var.PUBLIC_KEY}"
 }
 
 resource "aws_kms_key" "discourse_kms_key" {
@@ -302,64 +280,36 @@ resource "aws_route" "route" {
   gateway_id             = "${aws_internet_gateway.discourse_gw.id}"
 }
 
-resource "aws_route53_zone" "discourse_prod_zone" {
+data "aws_route53_zone" "discourse_prod_zone" {
   name = "discourse.cloud."
 
   tags {
-    Name   = "discourse"
-    Source = "terraform"
+    Name = "discourse-default"
   }
-}
-
-resource "aws_route53_record" "prod-ns" {
-  zone_id = "${aws_route53_zone.discourse_prod_zone.zone_id}"
-  name    = "discourse.cloud."
-  type    = "NS"
-  ttl     = "60"
-
-  records = [
-    "${aws_route53_zone.discourse_prod_zone.name_servers.0}",
-    "${aws_route53_zone.discourse_prod_zone.name_servers.1}",
-    "${aws_route53_zone.discourse_prod_zone.name_servers.2}",
-    "${aws_route53_zone.discourse_prod_zone.name_servers.3}",
-  ]
 }
 
 resource "aws_route53_record" "www" {
-  zone_id = "${aws_route53_zone.discourse_prod_zone.zone_id}"
+  zone_id = "${data.aws_route53_zone.discourse_prod_zone.zone_id}"
   name    = "www"
   type    = "CNAME"
   ttl     = "60"
-
   records = ["${aws_alb.discourse_alb.dns_name}"]
 }
 
-resource "aws_s3_bucket" "discourse_tf_state_bucket" {
-  bucket = "discourse-terraform-tfstate-${data.aws_caller_identity.current.account_id}"
-
-  acl = "private"
-
-  versioning {
-    enabled = true
-  }
-
-  logging {
-    target_bucket = "${aws_s3_bucket.discourse_log_bucket.id}"
-    target_prefix = "log/terraform/"
-  }
-
-  tags {
-    Name   = "discourse"
-    Source = "terraform"
-  }
+resource "aws_route53_record" "env_subdomain" {
+  zone_id = "${data.aws_route53_zone.discourse_prod_zone.zone_id}"
+  name    = "${terraform.env}"
+  type    = "CNAME"
+  ttl     = "60"
+  records = ["${aws_alb.discourse_alb.dns_name}"]
 }
 
 resource "aws_s3_bucket" "discourse_log_bucket" {
-  bucket = "discourse-log-bucket"
+  bucket = "discourse-log-bucket-${terraform.env}"
   acl    = "log-delivery-write"
 
   logging {
-    target_bucket = "discourse-log-bucket"
+    target_bucket = "discourse-log-bucket-${terraform.env}"
     target_prefix = "log/self/"
   }
 
@@ -373,7 +323,7 @@ resource "aws_s3_bucket" "discourse_log_bucket" {
         "s3:PutObject"
       ],
       "Effect": "Allow",
-      "Resource": "arn:aws:s3:::discourse-log-bucket/log/*",
+      "Resource": "arn:aws:s3:::discourse-log-bucket-${terraform.env}/log/*",
       "Principal": {
         "AWS": [
           "${data.aws_elb_service_account.main.arn}"
@@ -385,7 +335,7 @@ resource "aws_s3_bucket" "discourse_log_bucket" {
 POLICY
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
@@ -410,7 +360,7 @@ resource "aws_security_group" "allow_all" {
   }
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
@@ -425,7 +375,7 @@ resource "aws_subnet" "a" {
   depends_on              = ["aws_internet_gateway.discourse_gw"]
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
@@ -442,7 +392,7 @@ resource "aws_vpc" "discourse_vpc" {
   enable_dns_hostnames = true
 
   tags {
-    Name   = "discourse"
+    Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
 }
@@ -528,10 +478,6 @@ output "DISCOURSE_SMTP_USER_NAME" {
 
 output "LETSENCRYPT_ACCOUNT_EMAIL" {
   value = "${var.LETSENCRYPT_ACCOUNT_EMAIL}"
-}
-
-output "public_key" {
-  value = "${aws_key_pair.discourse_dev.public_key}"
 }
 
 output "default_security_group_id" {
