@@ -280,30 +280,6 @@ resource "aws_route" "route" {
   gateway_id             = "${aws_internet_gateway.discourse_gw.id}"
 }
 
-data "aws_route53_zone" "discourse_prod_zone" {
-  name = "discourse.cloud."
-
-  tags {
-    Name = "discourse-default"
-  }
-}
-
-resource "aws_route53_record" "www" {
-  zone_id = "${data.aws_route53_zone.discourse_prod_zone.zone_id}"
-  name    = "www"
-  type    = "CNAME"
-  ttl     = "60"
-  records = ["${aws_alb.discourse_alb.dns_name}"]
-}
-
-resource "aws_route53_record" "env_subdomain" {
-  zone_id = "${data.aws_route53_zone.discourse_prod_zone.zone_id}"
-  name    = "${terraform.env}"
-  type    = "CNAME"
-  ttl     = "60"
-  records = ["${aws_alb.discourse_alb.dns_name}"]
-}
-
 resource "aws_s3_bucket" "discourse_log_bucket" {
   bucket = "discourse-log-bucket-${terraform.env}"
   acl    = "log-delivery-write"
@@ -395,6 +371,30 @@ resource "aws_vpc" "discourse_vpc" {
     Name   = "discourse-${terraform.env}"
     Source = "terraform"
   }
+}
+
+resource "cloudflare_record" "apex" {
+  domain = "${var.cloudflare_domain}"
+  name   = "@"
+  type   = "CNAME"
+  ttl    = "1"
+  value  = "${aws_alb.discourse_alb.dns_name}"
+}
+
+resource "cloudflare_record" "www" {
+  domain = "${var.cloudflare_domain}"
+  name   = "www"
+  type   = "CNAME"
+  ttl    = "1"
+  value  = "${aws_alb.discourse_alb.dns_name}"
+}
+
+resource "cloudflare_record" "env_subdomain" {
+  domain = "${var.cloudflare_domain}"
+  name   = "${terraform.env}"
+  type   = "CNAME"
+  ttl    = "1"
+  value  = "${aws_alb.discourse_alb.dns_name}"
 }
 
 ###############

@@ -132,12 +132,10 @@ check_and_wait_for_host() {
 }
 
 create_state_bucket() {
-    ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-
     aws s3api create-bucket \
         --region "${AWS_DEFAULT_REGION}" \
         --create-bucket-configuration LocationConstraint="${AWS_DEFAULT_REGION}" \
-        --bucket "discourse-terraform-tfstate-${ACCOUNT_ID}"
+        --bucket "discourse-terraform-tfstate"
 }
 
 create_state_db() {
@@ -147,23 +145,6 @@ create_state_db() {
         --attribute-definitions AttributeName=LockID,AttributeType=S \
         --key-schema AttributeName=LockID,KeyType=HASH \
         --provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1
-}
-
-# Write backend configuration to backend_config.tf. This is needed because the
-# bucket name is dynamic (based on AWS account ID), but Terraform backend config
-# doesn't allow interpolation.
-create_backend_config() {
-    cat <<EOF > ./backend_config.tf
-terraform {
-  backend "s3" {
-    bucket         = "discourse-terraform-tfstate-${ACCOUNT_ID}"
-    key            = "dev/discourse.tfstate"
-    region         = "${AWS_DEFAULT_REGION}"
-    lock_table     = "terraform_statelock"
-    encrypt        = true
-  }
-}
-EOF
 }
 
 greet
@@ -179,8 +160,6 @@ my_key=$(get_local_public_key)
 # Create an s3 bucket and dynamoDB table if they don't exist already
 create_state_bucket || true
 create_state_db || true
-
-create_backend_config
 
 check_and_wait_for_host
 

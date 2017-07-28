@@ -17,3 +17,9 @@ DISCOURSE_DB_USERNAME = "discourse"
 DISCOURSE_DB_PASSWORD = "SOME_SECRET"
 
 LETSENCRYPT_ACCOUNT_EMAIL = "me@example.com"
+
+cloudflare_email = "me@example.com"
+
+cloudflare_domain = "discourse.cloud"
+
+cloudflare_token = "abc123def456"
