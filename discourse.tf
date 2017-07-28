@@ -373,6 +373,46 @@ resource "aws_vpc" "discourse_vpc" {
   }
 }
 
+resource "aws_autoscaling_group" "discourse_ag" {
+  # availability_zones        = ["${data.aws_availability_zones.available.names}"]
+  vpc_zone_identifier       = ["${aws_subnet.a.id}", "${aws_subnet.b.id}"]
+  name                      = "discourse-terraform-test-ag"
+  max_size                  = 5
+  min_size                  = 2
+  health_check_grace_period = 100
+  health_check_type         = "ELB"
+  desired_capacity          = 2
+  force_delete              = false
+  target_group_arns         = ["${aws_alb_target_group.frontend.arn}"]
+  wait_for_capacity_timeout = 0
+
+  launch_configuration = "${aws_launch_configuration.discourse_lc.name}"
+
+  tag {
+    key                 = "Name"
+    value               = "discourse-${terraform.env}"
+    propagate_at_launch = true
+  }
+
+  tag {
+    key                 = "Source"
+    value               = "terraform"
+    propagate_at_launch = true
+  }
+}
+
+resource "aws_launch_configuration" "discourse_lc" {
+  name_prefix     = "terraform-lc-example-"
+  image_id        = "${data.aws_ami.discourse_ami.id}"
+  instance_type   = "t2.micro"
+  security_groups = ["${aws_vpc.discourse_vpc.default_security_group_id}", "${aws_security_group.allow_all.id}"]
+  user_data       = "${file("userdata.sh")}"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 resource "cloudflare_record" "apex" {
   domain = "${var.cloudflare_domain}"
   name   = "@"
