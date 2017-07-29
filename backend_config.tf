@@ -1,8 +1,8 @@
 terraform {
   backend "s3" {
-    bucket         = "wombles-whacky-whatsit"
+    bucket         = "discourse-tfstate"
     key            = "tfstate"
-    region         = "ap-southeast-2"
-    dynamodb_table = "wombles-whacky-whatsit"
+    region         = "eu-central-1"
+    dynamodb_table = "discourse-tfstate"
   }
 }

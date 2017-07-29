@@ -13,15 +13,15 @@ This repository contains a Terraform plan and helper script for setting up Disco
 
 ### Setup
 
-Export environment variables containing your AWS credentials (`AWS_SECRET_ACCESS_KEY` and `AWS_ACCESS_KEY_ID`).
+Upload your public key to IAM and note the name.
 
 Copy the [secrets template](/terraform.tfvars.example):
 
 `$ cp terraform.tfvars.example terraform.tfvars`
 
-In this file, enter: 
+In this file, enter:
 
-- your public key (to SSH to the EC2 instance): this should match the output of `ssh-add -L | head -n1`
+- your public key name as uploaded to IAM
 - database credentials of your choice:
   - `DISCOURSE_DB_PASSWORD`
 - your SMTP credentials:
@@ -29,73 +29,37 @@ In this file, enter:
   - `DISCOURSE_SMTP_USER_NAME`
   - `DISCOURSE_SMTP_PASSWORD`
   - `DISCOURSE_SMTP_PORT`
+- your CloudFlare credentials
+  - `cloudflare_email`
+  - `cloudflare_token` (API key)
+- the name of a public key that has been uploaded to EC2 (verify with `aws ec2 describe-key-pairs --key-name your-key-name`). This is only needed in order to manually bootstrap the instances.
 
-See the "VARIABLES" section in [`discourse.tf`](/discourse.tf) for the full list of configurable variables.
+Specify a `domain` (registered in Route53) in `terraform.tfvars` for DNS entries to be created automatically at CloudFlare and Route53. In the Route53 console, manually configure the domain to use CloudFlare's nameservers (as they appear in your CloudFlare account).
 
+See the **VARIABLES** section in [`discourse.tf`](/discourse.tf) for the full list of configurable variables.
+
+### Shared state
+
+Modify `backend_config.tf` to refer to a `bucket` and `dynamodb_table` to be used for remote state file storage and locking. (See `utils.sh` for helper commands to create the s3 bucket and DynamoDB table if needed.)
 
 ## Usage
 
 Complete the steps described in the **Setup** section above before proceeding.
 
-First, run [`spin-aws.sh`](/spin-aws.sh); on the initial run, this will upload your public key to AWS (so it can be added to `authorized_keys` on the EC2 instance) and then exit.
+First, run `terraform plan` to show the AWS resources that will be created.
 
-Next, run `terraform plan` to show the AWS resources that will be created.
+Run `terraform apply` to create the resources.
 
-To actually create the EC2 instance, Postgres database and Redis, run `terraform apply`.
+As soon as the resources have been created, run `./spin-aws.sh`. This will:
 
-Then, run `./spin-aws.sh` again.  This will result in two new local files, `.env` and `aws.yml`, which should have been copied to the Discourse host for you.
+- create two new local files, `.env` and `aws.yml`
+- copy them to the running hosts you've just created
+- bootstrap the hosts (by running `ssh ubuntu@$host "/var/discourse/launcher bootstrap aws && /var/discourse/launcher start aws"`)
 
-Finally, to bootstrap and start, run:
+Once bootstrap is complete, your Discourse installation should be visible at the load balancer's public DNS endpoint, visible by running `terraform output DISCOURSE_ALB_HOSTNAME`.
 
-`ssh ubuntu@$(terraform output DISCOURSE_HOSTNAME) "/var/discourse/launcher bootstrap aws && /var/discourse/launcher start aws"`
-
-Once bootstrap is complete, your Discourse installation should be visible at the instance's public DNS endpoint, visible by running:
-
-`terraform output DISCOURSE_HOSTNAME`
-
-It should also be accessible via the load balancer endpoint (`terraform output DISCOURSE_ELB_HOSTNAME`).
-
-## Debugging
-
-Note: Redis and Postgres should *not* be accessible from the internet. Therefore, you first need to SSH to the Discourse host: `ssh ubuntu@$(terraform output DISCOURSE_HOSTNAME)`
-
-### Verify Redis connectivity
-
-`redis-cli -h $DISCOURSE_REDIS_HOST ping`  # This should work from the Discourse app instance, but not elsewhere
-
-Also: `redis-cli -h $DISCOURSE_REDIS_HOST set mykey somevalue` followed by `get mykey` should return "somevalue".
-
-### Verify Postgres connectivity
-
-To check Postgres (ensure `PGUSER`, `PGHOST` and `PGPASSWORD` are set; this should be automatically sourced via the `/tmp/.env` file):
-
-`psql -d discourse -c "select 'It is running'"`  # This should work from the Discourse app instance, but not elsewhere
+Note that the instances won't pass autoscaling health checks until they've been bootstrapped. This should be fixed in the near future with a real custom AMI that passes health checks on its own.
 
 ### Deleting (or replacing) resources
 
 To destroy all resources managed by Terraform, run `terraform destroy`.
-
-Occasionally, dependencies between resources can prevent a deletion or replacement from completing successfully.
-
-For example, if you get an error such as the following (when trying to delete a subnet, in the case below):
-
-```
-* aws_subnet.c: Error deleting subnet: timeout while waiting for state to become 'destroyed' (last state: 'pending', timeout: 5m0s)
-```
-
-...then try deleting the resource manually from the [AWS console](https://console.aws.amazon.com). Usually if Terraform fails to delete a resource, it's because AWS is preventing it for some reason. In this case, attempting to delete the subnet from the AWS VPC dashboard results in this error:
-
-```
-The following subnets contain one or more network interfaces, and cannot be deleted until those network interfaces have been deleted.
-subnet-edc4c3a7
-link: "Click here to view your network interfaces."
-```
-
-Clicking on the link leads to a filtered list showing the attached network interface. Trying to detach it, even with the "force" option, fails with the following error:
-
-```
-Error deleting network interface
-eni-bc614bf6: You do not have permission to access the specified resource.
-```
-
-In this example, the network interface was still attached to a subnet where a Redis and Postgres database were still running. Deleting these allowed the network interface to be detached and the subnet to be deleted.

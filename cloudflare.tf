@@ -4,9 +4,5 @@ provider "cloudflare" {
   token = "${var.cloudflare_token}"
 }
 
-variable "cloudflare_domain" {
-  default = "discourse.cloud"
-}
-
 variable "cloudflare_email" {}
 variable "cloudflare_token" {}

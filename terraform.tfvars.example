@@ -1,4 +1,15 @@
+app_instance_type = "t2.medium"
+
+domain = "discourse.cloud"
+
+cloudflare_email = "me@example.com"
+
+cloudflare_token = "abc123def456"
+
 region = "eu-central-1"
+
+# The name of your public key uploaded to IAM, to be added to authorized_keys on app instances
+public_key_name = "discourse-dev"
 
 DISCOURSE_SMTP_USER_NAME = "admin@example.com"
 
@@ -10,6 +21,10 @@ DISCOURSE_SMTP_PASSWORD = "pa$$word"
 
 DISCOURSE_SMTP_PORT = "587"
 
+LANG = "en_US.UTF-8"
+
+LETSENCRYPT_ACCOUNT_EMAIL = "me@example.com"
+
 PUBLIC_KEY = ""
 
 DISCOURSE_DB_USERNAME = "discourse"
@@ -17,9 +32,3 @@ DISCOURSE_DB_USERNAME = "discourse"
 DISCOURSE_DB_PASSWORD = "SOME_SECRET"
 
 LETSENCRYPT_ACCOUNT_EMAIL = "me@example.com"
-
-cloudflare_email = "me@example.com"
-
-cloudflare_domain = "discourse.cloud"
-
-cloudflare_token = "abc123def456"

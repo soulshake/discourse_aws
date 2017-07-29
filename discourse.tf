@@ -7,26 +7,18 @@
 # If you need to change a hardcoded value in this file, consider replacing it with a variable.
 # For more information, see README.md.
 
-variable "app_instance_type" {
-  default = "t2.medium"
-}
-
+variable "app_instance_type" {}
+variable "domain" {}
+variable "public_key_name" {}
+variable "DISCOURSE_DB_USERNAME" {}
+variable "DISCOURSE_DB_PASSWORD" {}
 variable "DISCOURSE_DEVELOPER_EMAILS" {}
 variable "DISCOURSE_SMTP_ADDRESS" {}
 variable "DISCOURSE_SMTP_USER_NAME" {}
 variable "DISCOURSE_SMTP_PASSWORD" {}
 variable "DISCOURSE_SMTP_PORT" {}
-
-variable "DISCOURSE_DB_USERNAME" {}
-variable "DISCOURSE_DB_PASSWORD" {}
-
-variable "LANG" {
-  default = "en_US.UTF-8"
-}
-
-variable "LETSENCRYPT_ACCOUNT_EMAIL" {
-  default = "me@example.com"
-}
+variable "LANG" {}
+variable "LETSENCRYPT_ACCOUNT_EMAIL" {}
 
 ############
 ### DATA ###
@@ -99,21 +91,7 @@ data "aws_db_instance" "database" {
 
 data "aws_availability_zones" "available" {}
 
-data "aws_caller_identity" "current" {}
-
 data "aws_elb_service_account" "main" {}
-
-data "terraform_remote_state" "discourse_remote_state" {
-  backend = "s3"
-
-  config {
-    name           = "discourse/remote-state"
-    bucket         = "wombles-whacky-whatsit"
-    key            = "tfstate"
-    region         = "ap-southeast-2"
-    dynamodb_table = "wombles-whacky-whatsit"
-  }
-}
 
 #################
 ### RESOURCES ###
@@ -168,9 +146,8 @@ resource "aws_alb_target_group_attachment" "frontend" {
 resource "aws_instance" "discourse_app" {
   ami = "${data.aws_ami.discourse_ami.id}"
 
-  count         = "${terraform.env == "default" ? 2 : 1}"
   instance_type = "${var.app_instance_type}"
-  key_name      = "discourse-dev"                         # Uploaded automatically under this name by ./spin-aws.sh
+  key_name      = "${var.public_key_name}"
   user_data     = "${file("userdata.sh")}"
   subnet_id     = "${aws_subnet.a.id}"
   depends_on    = ["aws_internet_gateway.discourse_gw"]
@@ -215,23 +192,6 @@ resource "aws_db_subnet_group" "discourse_db_subnet_group" {
   name = "discourse-${terraform.env}"
 
   subnet_ids = ["${aws_subnet.a.id}", "${aws_subnet.b.id}"]
-
-  tags {
-    Name   = "discourse-${terraform.env}"
-    Source = "terraform"
-  }
-}
-
-resource "aws_dynamodb_table" "terraform_statelock" {
-  name           = "terraform_statelock-${terraform.env}"
-  read_capacity  = 20
-  write_capacity = 20
-  hash_key       = "LockID"
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
 
   tags {
     Name   = "discourse-${terraform.env}"
@@ -374,14 +334,13 @@ resource "aws_vpc" "discourse_vpc" {
 }
 
 resource "aws_autoscaling_group" "discourse_ag" {
-  # availability_zones        = ["${data.aws_availability_zones.available.names}"]
   vpc_zone_identifier       = ["${aws_subnet.a.id}", "${aws_subnet.b.id}"]
-  name                      = "discourse-terraform-test-ag"
-  max_size                  = 5
-  min_size                  = 2
-  health_check_grace_period = 100
+  name                      = "discourse-terraform-ag"
+  max_size                  = 3
+  min_size                  = 1
+  health_check_grace_period = 500
   health_check_type         = "ELB"
-  desired_capacity          = 2
+  desired_capacity          = 1
   force_delete              = false
   target_group_arns         = ["${aws_alb_target_group.frontend.arn}"]
   wait_for_capacity_timeout = 0
@@ -402,39 +361,130 @@ resource "aws_autoscaling_group" "discourse_ag" {
 }
 
 resource "aws_launch_configuration" "discourse_lc" {
-  name_prefix     = "terraform-lc-example-"
-  image_id        = "${data.aws_ami.discourse_ami.id}"
-  instance_type   = "t2.micro"
-  security_groups = ["${aws_vpc.discourse_vpc.default_security_group_id}", "${aws_security_group.allow_all.id}"]
-  user_data       = "${file("userdata.sh")}"
+  name_prefix                 = "terraform-lc-"
+  image_id                    = "${data.aws_ami.discourse_ami.id}"
+  instance_type               = "t2.micro"
+  security_groups             = ["${aws_vpc.discourse_vpc.default_security_group_id}", "${aws_security_group.allow_all.id}"]
+  user_data                   = "${file("userdata.sh")}"
+  key_name                    = "${var.public_key_name}"
+  associate_public_ip_address = true
 
   lifecycle {
     create_before_destroy = true
   }
 }
 
-resource "cloudflare_record" "apex" {
-  domain = "${var.cloudflare_domain}"
-  name   = "@"
-  type   = "CNAME"
+################################################# PROD DNS ###
+
+# Delegate the prod subdomain from CloudFlare to AWS
+
+resource "cloudflare_record" "prod-ns0" {
+  domain = "${var.domain}"
+  name   = "prod"
+  type   = "NS"
   ttl    = "1"
-  value  = "${aws_alb.discourse_alb.dns_name}"
+  value  = "${aws_route53_zone.prod.name_servers[0]}"
 }
 
-resource "cloudflare_record" "www" {
-  domain = "${var.cloudflare_domain}"
-  name   = "www"
-  type   = "CNAME"
+resource "cloudflare_record" "prod-ns1" {
+  domain = "${var.domain}"
+  name   = "prod"
+  type   = "NS"
   ttl    = "1"
-  value  = "${aws_alb.discourse_alb.dns_name}"
+  value  = "${aws_route53_zone.prod.name_servers[1]}"
 }
 
-resource "cloudflare_record" "env_subdomain" {
-  domain = "${var.cloudflare_domain}"
-  name   = "${terraform.env}"
-  type   = "CNAME"
+resource "cloudflare_record" "prod-ns2" {
+  domain = "${var.domain}"
+  name   = "prod"
+  type   = "NS"
   ttl    = "1"
-  value  = "${aws_alb.discourse_alb.dns_name}"
+  value  = "${aws_route53_zone.prod.name_servers[2]}"
+}
+
+resource "cloudflare_record" "prod-ns3" {
+  domain = "${var.domain}"
+  name   = "prod"
+  type   = "NS"
+  ttl    = "1"
+  value  = "${aws_route53_zone.prod.name_servers[3]}"
+}
+
+# Route53 zone file for prod subdomain
+
+resource "aws_route53_zone" "prod" {
+  name = "prod.${var.domain}"
+
+  tags {
+    Name   = "discourse-${terraform.env}"
+    Source = "terraform"
+  }
+}
+
+# prod zone resource records
+
+resource "aws_route53_record" "www_prod" {
+  zone_id = "${aws_route53_zone.prod.zone_id}"
+
+  name       = "www"
+  type       = "CNAME"
+  depends_on = ["aws_route53_zone.prod", "aws_alb.discourse_alb"]
+  records    = ["${aws_alb.discourse_alb.dns_name}"]
+  ttl        = 60
+}
+
+################################################# DEV DNS ###
+
+# Delegate the dev subdomain
+
+resource "cloudflare_record" "dev_subdomain-ns0" {
+  domain = "${var.domain}"
+  name   = "dev"
+  type   = "NS"
+  ttl    = "1"
+  value  = "${aws_route53_zone.dev.name_servers[0]}"
+}
+
+resource "cloudflare_record" "dev_subdomain-ns1" {
+  domain = "${var.domain}"
+  name   = "dev"
+  type   = "NS"
+  ttl    = "1"
+  value  = "${aws_route53_zone.dev.name_servers[1]}"
+}
+
+resource "cloudflare_record" "dev_subdomain-ns2" {
+  domain = "${var.domain}"
+  name   = "dev"
+  type   = "NS"
+  ttl    = "1"
+  value  = "${aws_route53_zone.dev.name_servers[2]}"
+}
+
+resource "cloudflare_record" "dev_subdomain-ns3" {
+  domain = "${var.domain}"
+  name   = "dev"
+  type   = "NS"
+  ttl    = "1"
+  value  = "${aws_route53_zone.dev.name_servers[3]}"
+}
+
+resource "aws_route53_zone" "dev" {
+  name = "dev.${var.domain}"
+
+  tags {
+    Name   = "discourse-${terraform.env}"
+    Source = "terraform"
+  }
+}
+
+resource "aws_route53_record" "dev_subdomain" {
+  zone_id    = "${aws_route53_zone.dev.zone_id}"
+  name       = "${terraform.env}"
+  type       = "CNAME"
+  depends_on = ["aws_route53_zone.dev", "aws_alb.discourse_alb"]
+  records    = ["${aws_alb.discourse_alb.dns_name}"]
+  ttl        = 60
 }
 
 ###############
@@ -443,18 +493,6 @@ resource "cloudflare_record" "env_subdomain" {
 
 # The outputs defined below can be accessed via terraform, e.g. `terraform output DISCOURSE_DB_HOST`.
 # These are used to generate the .env that is copied to the Discourse host for easier setup.
-
-output "account_id" {
-  value = "${data.aws_caller_identity.current.account_id}"
-}
-
-output "caller_arn" {
-  value = "${data.aws_caller_identity.current.arn}"
-}
-
-output "caller_user" {
-  value = "${data.aws_caller_identity.current.user_id}"
-}
 
 output "DISCOURSE_APP_PUBLIC_IP" {
   value = "${aws_instance.discourse_app.public_ip}"
