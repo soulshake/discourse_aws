@@ -1,6 +1,6 @@
 app_instance_type = "t2.medium"
 
-domain = "discourse.cloud"
+domain = "example.com"
 
 cloudflare_email = "me@example.com"
 
